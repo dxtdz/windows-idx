@@ -8,25 +8,29 @@ ISO_FILE="win11-gamer.iso"
 DISK_FILE="/var/win11.qcow2"
 DISK_SIZE="64G"
 
-RAM="8G"
+RAM="16G"
 CORES="4"
 
 VNC_DISPLAY=":0"
 RDP_PORT="3389"
+VNC_PORT="5900"
 
 FLAG_FILE="installed.flag"
 WORKDIR="$HOME/windows-idx"
 
-### NGROK ###
-NGROK_TOKEN="38WO5iYPn4Hq5A5SUOjtGptsxfE_7jDB4PmSF78GKcAguUo1H"
-NGROK_DIR="$HOME/.ngrok"
-NGROK_BIN="$NGROK_DIR/ngrok"
-NGROK_CFG="$NGROK_DIR/ngrok.yml"
-NGROK_LOG="$NGROK_DIR/ngrok.log"
+### LOCALTONET CONFIG ###
+# 👉 ĐĂNG KÝ TẠI: https://localtonet.com
+# 👉 LẤY TOKEN TỪ: Dashboard → Auth → Tokens
+LOCALTONET_TOKEN=""  # <--- QUAN TRỌNG: NHẬP TOKEN VÀO ĐÂY
+LOCALTONET_DIR="$HOME/.localtonet"
+LOCALTONET_BIN="$LOCALTONET_DIR/localtonet"
+LOCALTONET_LOG="$LOCALTONET_DIR/tunnel.log"
 
 ### CHECK ###
 [ -e /dev/kvm ] || { echo "❌ No /dev/kvm"; exit 1; }
 command -v qemu-system-x86_64 >/dev/null || { echo "❌ No qemu"; exit 1; }
+command -v wget >/dev/null || { echo "❌ Please install wget"; exit 1; }
+command -v unzip >/dev/null || { echo "❌ Please install unzip"; exit 1; }
 
 ### PREP ###
 mkdir -p "$WORKDIR"
@@ -52,46 +56,77 @@ fi
 ) &
 FILE_PID=$!
 
-#################
-# NGROK START  #
-#################
-mkdir -p "$NGROK_DIR"
 
-if [ ! -f "$NGROK_BIN" ]; then
-  curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz \
-  | tar -xz -C "$NGROK_DIR"
-  chmod +x "$NGROK_BIN"
+#########################
+# LOCALTONET SETUP     #
+#########################
+mkdir -p "$LOCALTONET_DIR"
+
+# Tải localtonet client nếu chưa có
+if [ ! -f "$LOCALTONET_BIN" ]; then
+  echo "📥 Đang tải localtonet client..."
+  cd "$LOCALTONET_DIR"
+  wget -q --show-progress https://localtonet.com/download/localtonet-linux-64bit.zip
+  unzip -q localtonet-linux-64bit.zip
+  rm localtonet-linux-64bit.zip
+  chmod +x localtonet
+  cd "$WORKDIR"
 fi
 
-cat > "$NGROK_CFG" <<EOF
-version: "2"
-authtoken: $NGROK_TOKEN
+# Xác thực với token
+echo "🔑 Đang xác thực localtonet..."
+"$LOCALTONET_BIN" auth "$LOCALTONET_TOKEN"
+
+# Kill tunnel cũ nếu đang chạy
+pkill -f "$LOCALTONET_BIN" 2>/dev/null || true
+
+# Tạo file cấu hình cho 2 tunnels
+cat > "$LOCALTONET_DIR/config.yaml" <<EOF
 tunnels:
-  vnc:
+  rdp-tunnel:
     proto: tcp
-    addr: 5900
-  rdp:
+    addr: $RDP_PORT
+    bind_port: 0  # random port, lấy từ log
+  vnc-tunnel:
     proto: tcp
-    addr: 3389
+    addr: $VNC_PORT
+    bind_port: 0  # random port, lấy từ log
 EOF
 
-pkill -f "$NGROK_BIN" 2>/dev/null || true
-"$NGROK_BIN" start --all --config "$NGROK_CFG" \
-  --log=stdout > "$NGROK_LOG" 2>&1 &
-sleep 5
+# Chạy localtonet và ghi log
+echo "🚀 Đang khởi động tunnels..."
+nohup "$LOCALTONET_BIN" start --config "$LOCALTONET_DIR/config.yaml" > "$LOCALTONET_LOG" 2>&1 &
 
-VNC_ADDR=$(grep -oE 'tcp://[^ ]+' "$NGROK_LOG" | sed -n '1p')
-RDP_ADDR=$(grep -oE 'tcp://[^ ]+' "$NGROK_LOG" | sed -n '2p')
+# Đợi tunnel khởi tạo
+sleep 8
 
-echo "🌍 VNC PUBLIC : $VNC_ADDR"
-echo "🌍 RDP PUBLIC : $RDP_ADDR"
+# Hàm lấy địa chỉ public từ log
+get_tunnel_url() {
+  local port=$1
+  local pattern="tunnel started:.*:${port}"
+  grep -E "$pattern" "$LOCALTONET_LOG" | tail -1 | grep -oE 'tcp://[^ ]+' || echo "⏳ Đang chờ..."
+}
 
-#################
-# RUN QEMU     #
-#################
+RDP_ADDR=$(get_tunnel_url $RDP_PORT)
+VNC_ADDR=$(get_tunnel_url $VNC_PORT)
+
+echo ""
+echo "========================================="
+echo "🌍 RDP PUBLIC: $RDP_ADDR"
+echo "🌍 VNC PUBLIC: $VNC_ADDR"
+echo "========================================="
+echo ""
+echo "📝 Log chi tiết: tail -f $LOCALTONET_LOG"
+echo ""
+
+
+#########################
+# RUN QEMU             #
+#########################
 if [ ! -f "$FLAG_FILE" ]; then
   echo "⚠️  CHẾ ĐỘ CÀI ĐẶT WINDOWS"
-  echo "👉 Cài xong quay lại nhập: xong"
+  echo "👉 DÙNG VNC CLIENT KẾT NỐI VÀO ĐỊA CHỈ TRÊN ĐỂ CÀI WINDOWS"
+  echo "👉 CÀI XONG QUAY LẠI ĐÂY NHẬP: xong"
 
   qemu-system-x86_64 \
     -enable-kvm \
@@ -102,7 +137,7 @@ if [ ! -f "$FLAG_FILE" ]; then
     -drive file="$DISK_FILE",if=ide,format=qcow2 \
     -cdrom "$ISO_FILE" \
     -boot order=d \
-    -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
+    -netdev user,id=net0,hostfwd=tcp::3389-:3389,hostfwd=tcp::5900-:5900 \
     -device e1000,netdev=net0 \
     -vnc "$VNC_DISPLAY" \
     -usb -device usb-tablet &
@@ -110,20 +145,22 @@ if [ ! -f "$FLAG_FILE" ]; then
   QEMU_PID=$!
 
   while true; do
-    read -rp "👉 Nhập 'xong': " DONE
+    read -rp "👉 Nhập 'xong' khi đã cài Windows xong: " DONE
     if [ "$DONE" = "xong" ]; then
       touch "$FLAG_FILE"
-      kill "$QEMU_PID"
-      kill "$FILE_PID"
-      pkill -f "$NGROK_BIN"
+      kill "$QEMU_PID" 2>/dev/null
+      kill "$FILE_PID" 2>/dev/null
+      pkill -f "$LOCALTONET_BIN" 2>/dev/null
       rm -f "$ISO_FILE"
-      echo "✅ Hoàn tất – lần sau boot thẳng qcow2"
+      echo "✅ Hoàn tất cài đặt – lần sau boot thẳng qcow2"
       exit 0
     fi
   done
 
 else
   echo "✅ Windows đã cài – boot thường"
+  echo "👉 KẾT NỐI RDP: $RDP_ADDR"
+  echo "👉 KẾT NỐI VNC: $VNC_ADDR"
 
   qemu-system-x86_64 \
     -enable-kvm \
@@ -133,7 +170,7 @@ else
     -machine q35 \
     -drive file="$DISK_FILE",if=ide,format=qcow2 \
     -boot order=c \
-    -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
+    -netdev user,id=net0,hostfwd=tcp::3389-:3389,hostfwd=tcp::5900-:5900 \
     -device e1000,netdev=net0 \
     -vnc "$VNC_DISPLAY" \
     -usb -device usb-tablet
