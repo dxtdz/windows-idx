@@ -21,7 +21,7 @@ WORKDIR="$HOME/windows-idx"
 ### LOCALTONET CONFIG ###
 # 👉 ĐĂNG KÝ TẠI: https://localtonet.com
 # 👉 LẤY TOKEN TỪ: Dashboard → Auth → Tokens
-LOCALTONET_TOKEN=""  # <--- QUAN TRỌNG: NHẬP TOKEN VÀO ĐÂY
+LOCALTONET_TOKEN="Ek57xXNWi2rStCPu86JcFpoj1v9dRsOD3"  # <--- QUAN TRỌNG: NHẬP TOKEN VÀO ĐÂY
 LOCALTONET_DIR="$HOME/.localtonet"
 LOCALTONET_BIN="$LOCALTONET_DIR/localtonet"
 LOCALTONET_LOG="$LOCALTONET_DIR/tunnel.log"
